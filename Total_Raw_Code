@@ -1,0 +1,206 @@
+# %%
+!nvidia-smi
+
+# %%
+import os
+HOME = os.getcwd()
+print(HOME)
+
+# %%
+!pip install ultralytics --upgrade -q
+
+# %%
+
+
+from IPython import display
+display.clear_output()
+
+import ultralytics
+ultralytics.checks()
+
+# %%
+from ultralytics import YOLO
+
+from IPython.display import display, Image
+
+# %%
+# # Delete everything in /content
+# !rm -rf /content/*
+
+# %%
+# Just testing the pretrained model
+%cd {HOME}
+!yolo task=detect mode=predict model=yolov8n.pt conf=0.25 source='https://media.roboflow.com/notebooks/examples/dog.jpeg' save=True
+
+# %%
+%cd {HOME}
+Image(filename='runs/detect/predict/dog.jpg', height=600)
+
+# %%
+# Downloading dataset
+
+!mkdir {HOME}/datasets
+%cd {HOME}/datasets
+
+!pip install roboflow --quiet
+
+# Import the Roboflow class
+from roboflow import Roboflow # This line is added to import the Roboflow class.
+
+# Set up Roboflow and download using "raw" format
+rf = Roboflow(api_key="SCdzbsMzhNfvVpjDp0mB")
+project = rf.workspace("licenceplate-pfqqh").project("licence-plate-detection-kip63")
+dataset = project.version(1).download("yolov12")
+
+# %% [markdown]
+# ## Custom Training
+
+# %%
+%cd {HOME}
+
+!yolo task=detect mode=train model=yolov8s.pt data={dataset.location}/data.yaml epochs=50 imgsz=800 plots=True
+
+# %%
+!ls {HOME}/runs/detect/train/
+
+# %%
+%cd {HOME}
+Image(filename=f'{HOME}/runs/detect/train/confusion_matrix.png', width=600)
+
+# %%
+%cd {HOME}
+Image(filename=f'{HOME}/runs/detect/train/results.png', width=600)
+
+# %%
+%cd {HOME}
+Image(filename=f'{HOME}/runs/detect/train/val_batch0_pred.jpg', width=600)
+
+# %% [markdown]
+# ## Validate Custom Model
+
+# %%
+%cd {HOME}
+
+!yolo task=detect mode=val model={HOME}/runs/detect/train/weights/best.pt data={dataset.location}/data.yaml
+
+# %%
+val_output = """
+Class     Images  Instances      Box(P          R      mAP50  mAP50-95)
+all         70        218      0.851      0.756      0.845      0.662
+license-plate         70         84       0.87       0.81      0.895       0.69
+vehicle         68        134      0.832      0.701      0.795      0.635
+"""
+
+import re
+
+# Extract metrics for 'all' class
+metrics_line = re.search(r'all\s+\d+\s+\d+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)', val_output)
+if metrics_line:
+    precision, recall, map50, map5095 = map(float, metrics_line.groups())
+    print(f"📊 Parsed Metrics:\nPrecision: {precision}\nRecall: {recall}\nmAP@0.5: {map50}\nmAP@0.5:0.95: {map5095}")
+
+
+# %%
+%cd {HOME}
+!yolo task=detect mode=predict model={HOME}/runs/detect/train/weights/best.pt conf=0.25 source={dataset.location}/test/images save=True
+
+
+# %%
+%cd {HOME}
+!yolo task=detect mode=predict model={HOME}/runs/detect/train/weights/best.pt conf=0.25 source={dataset.location}/test/videos save=True
+
+# %%
+import glob
+from IPython.display import Image, display
+
+for image_path in glob.glob(f'{HOME}/runs/detect/predict3/*.jpg')[2:5]:
+      display(Image(filename=image_path, width=600))
+      print("\n")
+
+
+# %%
+# !pip uninstall -y ultralytics
+# !pip install ultralytics==8.0.196
+
+
+# %%
+project.version(dataset.version).deploy(model_type="yolov8", model_path=f"{HOME}/runs/detect/train/")
+
+# %%
+#loading the model that we just built
+model = project.version(dataset.version).model
+
+#choose random test set image
+import os, random
+# # test_set_loc = dataset.location + "/test/images/"
+# # random_test_image = random.choice(os.listdir(test_set_loc))
+# random_test_image_path = "/content/datasets/licence-plate-detection-1/test/images/be9fd0014b5a4f2a_jpg.rf.36eea3acd5b2abd41c9d7f59390452cf.jpg"
+# random_test_image = "be9fd0014b5a4f2a_jpg.rf.36eea3acd5b2abd41c9d7f59390452cf.jpg"
+# print("running inference on " + random_test_image)
+
+
+# Define test set image folder
+test_set_loc = dataset.location + "/test/images/"
+
+# Choose a random image from the test set
+random_test_image = random.choice([f for f in os.listdir(test_set_loc) if f.endswith(('.jpg', '.jpeg', '.png'))])
+random_test_image_path = os.path.join(test_set_loc, random_test_image)
+
+# Load and show the image
+img = cv2.imread(random_test_image_path)
+cv2_imshow(img)
+
+print("Running inference on " + random_test_image)
+
+pred = model.predict(random_test_image_path, confidence=40, overlap=30).json()
+pred
+
+# %%
+!pip install easyocr
+
+# %%
+import easyocr
+from matplotlib import pyplot as plt
+
+import cv2
+from google.colab.patches import cv2_imshow
+
+# %%
+midx = pred['predictions'][0]['x']
+midy = pred['predictions'][0]['y']
+width = pred['predictions'][0]['width']
+height = pred['predictions'][0]['height']
+
+xmin =int(midx - width/2)
+xmax = int(midx + width/2)
+ymin = int(midy - height/2)
+ymax = int(midy + height/2)
+
+import cv2
+img = cv2.imread(random_test_image_path)
+crop_img = img[ymin:ymax, xmin:xmax]
+
+cv2_imshow(img)
+print('\nExtracted licence plate:\n')
+cv2_imshow(crop_img)
+
+
+
+# %%
+reader = easyocr.Reader(['en'])
+result = reader.readtext(crop_img)
+print('Licence number: ', result[0][1])
+
+# %%
+# Load your trained model
+model = YOLO('/content/runs/detect/train/weights/best.pt')
+
+# Evaluate on the test set (defined in your YAML file)
+metrics = model.val(data='/content/datasets/licence-plate-detection-1/data.yaml')
+
+# Print results
+print(metrics)  # This includes mAP@0.5, mAP@0.5:0.95, precision, recall
+
+# model={HOME}/runs/detect/train/weights/best.pt data={dataset.location}/data.yaml
+
+
